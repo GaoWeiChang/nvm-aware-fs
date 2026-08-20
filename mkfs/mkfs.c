@@ -23,11 +23,11 @@
 #define NINODES 200
 
 // Disk layout:
-// [ boot block | sb block | log | inode blocks | free bit map | data blocks ]
+// [ boot block | sb block | log header slots (K) | log data blocks | inode blocks | free bit map | data blocks ]
 
 int nbitmap = FSSIZE / BPB + 1;
 int ninodeblocks = NINODES / IPB + 1;
-int nlog = LOGBLOCKS + 1; // Header followed by LOGBLOCKS data blocks.
+int nlog = LOG_HDR_SLOTS + LOGBLOCKS; // K header slots followed by LOGBLOCKS data blocks
 int nmeta;   // Number of meta blocks (boot, sb, nlog, inode, bitmap)
 int nblocks; // Number of data blocks
 

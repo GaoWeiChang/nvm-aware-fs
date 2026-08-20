@@ -33,13 +33,18 @@
 // Contents of the header block, used for both the on-disk header block
 // and to keep track in memory of logged block# before commit.
 struct logheader {
-  int n;
-  int block[LOGBLOCKS];
+  int n;                  // amount of blocks in this transaction
+  uint seq;               // monotonically increasing, boot picks the highest
+  int block[LOGBLOCKS];   // real disk block number for each logged block
+  int slot[LOGBLOCKS];    // physical slot within the log data region
 };
 
 struct log {
   struct spinlock lock;
-  int start;
+  int hstart;      // base block of the K rotating header slots
+  int dstart;      // base block of the log data area
+  int hcur;        // index of the slot holding the current header
+  uint seq;        // sequence number of the header last written
   int outstanding; // how many FS sys calls are executing.
   int committing;  // in commit(), please wait.
   int dev;
@@ -58,7 +63,8 @@ initlog(int dev, struct superblock *sb)
     panic("initlog: too big logheader");
 
   initlock(&log.lock, "log");
-  log.start = sb->logstart;
+  log.hstart = sb->logstart;
+  log.dstart = sb->logstart + LOG_HDR_SLOTS;
   log.dev = dev;
   recover_from_log();
 }
@@ -73,7 +79,7 @@ install_trans(int recovering)
     if (recovering) {
       printk("recovering tail %d dst %d\n", tail, log.lh.block[tail]);
     }
-    struct buf *lbuf = bread(log.dev, log.start + tail + 1); // read log block
+    struct buf *lbuf = bread(log.dev, log.dstart + log.lh.slot[tail]); // read log block
     struct buf *dbuf = bread(log.dev, log.lh.block[tail]);   // read dst
     memmove(dbuf->data, lbuf->data, BSIZE); // copy block to dst
     bwrite(dbuf);                           // write dst to disk
@@ -88,31 +94,60 @@ install_trans(int recovering)
 static void
 read_head(void)
 {
-  struct buf *buf = bread(log.dev, log.start);
-  struct logheader *lh = (struct logheader *)(buf->data);
-  int i;
-  log.lh.n = lh->n;
-  for (i = 0; i < log.lh.n; i++) {
-    log.lh.block[i] = lh->block[i];
+  /*
+    Scan the K header slots and load the one hold the 
+    highest sequence number (most recently written) into the in-memory log header
+  */
+
+  struct buf *bufs[LOG_HDR_SLOTS];
+  int best_slot = 0;
+  uint best_seq = 0;
+
+  for (int slot = 0; slot < LOG_HDR_SLOTS; slot++) {
+    bufs[slot] = bread(log.dev, log.hstart + slot);
+    struct logheader *hb = (struct logheader *)(bufs[slot]->data);
+    if (slot == 0 || hb->seq >= best_seq) {
+      best_seq = hb->seq;
+      best_slot = slot;
+    }
   }
-  brelse(buf);
+
+  struct logheader *hb = (struct logheader *)(bufs[best_slot]->data);
+  log.hcur = best_slot;
+  log.seq = best_seq;
+  log.lh.n = hb->n;
+  log.lh.seq = hb->seq;
+  for (int i = 0; i < log.lh.n; i++) {
+    log.lh.block[i] = hb->block[i];
+    log.lh.slot[i] = hb->slot[i];
+  }
+
+  for (int slot = 0; slot < LOG_HDR_SLOTS; slot++)
+    brelse(bufs[slot]);
 }
 
-// Write in-memory log header to disk.
+// Write in-memory log header to disk, into the next slot in the rotation
 // This is the true point at which the
 // current transaction commits.
 static void
 write_head(void)
 {
-  struct buf *buf = bread(log.dev, log.start);
+  log.hcur = (log.hcur + 1) % LOG_HDR_SLOTS;
+  log.seq++;
+
+  struct buf *buf = bread(log.dev, log.hstart + log.hcur);
   struct logheader *hb = (struct logheader *)(buf->data);
   int i;
   hb->n = log.lh.n;
+  hb->seq = log.seq;
   for (i = 0; i < log.lh.n; i++) {
     hb->block[i] = log.lh.block[i];
+    hb->slot[i] = log.lh.slot[i];
   }
   bwrite(buf);
   brelse(buf);
+
+  log.lh.seq = log.seq;
 }
 
 static void
@@ -187,10 +222,32 @@ end_op(void)
 static void
 write_log(void)
 {
+  /*
+    slots are picked by lowest wear count so writes spread evenly 
+    and low-numbered slots don't wear out faster than the rest
+  */
+  int used[LOGBLOCKS] = {0};
   int tail;
 
   for (tail = 0; tail < log.lh.n; tail++) {
-    struct buf *to = bread(log.dev, log.start + tail + 1); // log block
+    // find best wear
+    int best = -1;
+    uint best_wear = 0xFFFFFFFF;
+
+    for (int s = 0; s < LOGBLOCKS; s++) {
+      if (used[s])
+        continue;
+      uint w = nvm_get_write_count(log.dstart + s);
+      if (w < best_wear) {
+        best_wear = w;
+        best = s;
+      }
+    }
+
+    used[best] = 1;
+    log.lh.slot[tail] = best;
+
+    struct buf *to = bread(log.dev, log.dstart + best); // log block
     struct buf *from = bread(log.dev, log.lh.block[tail]); // cache block
     memmove(to->data, from->data, BSIZE);
     bwrite(to); // write the log
