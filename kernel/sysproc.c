@@ -6,6 +6,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
+#include "nvm_sim.h"
 
 uint64
 sys_exit(void)
@@ -109,4 +110,11 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_nvmstats(void)
+{
+  nvm_print_stats();
+  return 0;
 }

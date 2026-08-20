@@ -69,24 +69,47 @@ balloc(uint dev)
 {
   int b, bi, m;
   struct buf *bp;
+  uint best_block = 0;
+  uint best_wear = 0xFFFFFFFF;
+  int found = 0;
 
-  bp = 0;
+  // scan all block to find least wear block
   for (b = 0; b < sb.size; b += BPB) {
     bp = bread(dev, BBLOCK(b, sb));
     for (bi = 0; bi < BPB && b + bi < sb.size; bi++) {
       m = 1 << (bi % 8);
       if ((bp->data[bi / 8] & m) == 0) { // Is block free?
-        bp->data[bi / 8] |= m;           // Mark block in use.
-        log_write(bp);
-        brelse(bp);
-        bzero(dev, b + bi);
-        return b + bi;
+        uint blockno = b + bi;
+
+        if(nvm_is_worn_out(blockno))
+          continue;
+        
+        uint wear = nvm_get_write_count(blockno);
+        if(wear < best_wear){
+          best_block = blockno;
+          best_wear = wear;
+          found = 1;
+        }
       }
     }
     brelse(bp);
   }
-  printk("balloc: out of blocks\n");
-  return 0;
+
+  if(!found){
+    printk("balloc: out of blocks\n");
+    return 0;
+  }
+
+  // allocate least wear block
+  bp = bread(dev, BBLOCK(best_block, sb));
+  bi = best_block % BPB;
+  m = 1 << (bi % 8);
+  bp->data[bi / 8] |= m;           // Mark block in use.
+  log_write(bp);
+  brelse(bp);
+  bzero(dev, best_block);
+
+  return best_block;
 }
 
 // Free a disk block.

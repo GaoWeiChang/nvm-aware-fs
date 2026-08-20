@@ -95,6 +95,7 @@ bread(uint dev, uint blockno)
 
   b = bget(dev, blockno);
   if (!b->valid) {
+    nvm_read(blockno);
     virtio_disk_rw(b, 0);
     b->valid = 1;
   }
@@ -108,6 +109,8 @@ bwrite(struct buf *b)
 {
   if (!holdingsleep(&b->lock))
     panic("bwrite");
+
+  nvm_write(b->blockno);
   virtio_disk_rw(b, 1);
 }
 

@@ -182,5 +182,13 @@ void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
 void            virtio_disk_intr(void);
 
+// nvm_sim.c
+void            nvm_init(void);
+void            nvm_write(uint blockno);
+void            nvm_read(uint blockno);
+int             nvm_is_worn_out(uint blockno);
+uint            nvm_least_worn_block(void);
+uint            nvm_get_write_count(uint blockno);
+
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x) / sizeof((x)[0]))
