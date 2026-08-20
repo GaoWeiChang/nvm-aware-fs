@@ -20,6 +20,7 @@
 #include "fs.h"
 #include "buf.h"
 #include "file.h"
+#include "nvm_sim.h"
 
 #define min(a, b) ((a) < (b) ? (a) : (b))
 // there should be one superblock per disk device, but we run with
@@ -127,6 +128,33 @@ bfree(int dev, uint b)
   bp->data[bi / 8] &= ~m;
   log_write(bp);
   brelse(bp);
+}
+
+// Remap old block to the least wear block
+static uint
+remap_block(uint dev, uint old_block)
+{
+  struct buf *old_buf, *new_buf;
+  uint new_block;
+
+  // get the least wear block
+  new_block = balloc(dev);
+  if(new_block == 0)
+    panic("remap_block: balloc failed");
+
+  old_buf = bread(dev, old_block);
+  new_buf = bread(dev, new_block);
+
+  // copy old data to new
+  memmove(new_buf->data, old_buf->data, BSIZE);
+
+  log_write(new_buf);
+  brelse(old_buf);
+  brelse(new_buf);
+
+  bfree(dev, old_block);
+
+  return new_block;
 }
 
 // Inodes.
@@ -564,6 +592,16 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
     uint addr = bmap(ip, off / BSIZE);
     if (addr == 0)
       break;
+
+    uint min_wear = nvm_get_write_count(nvm_least_worn_block());
+    uint cur_wear = nvm_get_write_count(addr);
+
+    // check for remap address for the data block
+    if((nvm_is_worn_out(addr)) || (cur_wear >= min_wear + NVM_WEAR_SKEW_LIMIT)){
+      addr = remap_block(ip->dev, addr);
+      ip->addrs[off / BSIZE] = addr;        // update indirection table
+    }
+
     bp = bread(ip->dev, addr);
     m = min(n - tot, BSIZE - off % BSIZE);
     if (either_copyin(bp->data + (off % BSIZE), user_src, src, m) == -1) {

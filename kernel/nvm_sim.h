@@ -4,7 +4,7 @@
 #define NVM_ENDURANCE       100000  // block endurance
 #define NVM_READ_PENALTY    1
 #define NVM_WRITE_PENALTY   10      // additional penalty for write
-
+#define NVM_WEAR_SKEW_LIMIT 5       // proactively remap once the block has worn far ahead of the least-worn block
 struct nvm_block_info {
     uint32 write_count;
     uint32 read_count;
