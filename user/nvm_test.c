@@ -9,7 +9,7 @@ main(int argc, char *argv[])
     int fd, i;
 
     // simulate nvm write 200 times
-    for(i = 0; i < 1000; i++){
+    for(i = 0; i < 200; i++){
         fd = open("testfile", O_CREATE | O_WRONLY);
         if(fd < 0){
             printf("nvm_test: open failed\n");
