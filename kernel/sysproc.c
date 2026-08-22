@@ -7,6 +7,7 @@
 #include "proc.h"
 #include "vm.h"
 #include "nvm_sim.h"
+#include "fs.h"
 
 uint64
 sys_exit(void)
@@ -115,6 +116,15 @@ sys_uptime(void)
 uint64
 sys_nvmstats(void)
 {
-  nvm_print_stats();
+  nvm_print_block_used();
+
+  struct superblock *sbp = fsgetsb();
+  uint nbitmap = sbp->size / BPB + 1;
+
+  nvm_print_stats("log",    sbp->logstart,   sbp->inodestart);
+  nvm_print_stats("inode",  sbp->inodestart, sbp->bmapstart);
+  nvm_print_stats("bitmap", sbp->bmapstart,  sbp->bmapstart + nbitmap);
+  nvm_print_stats("data",   sbp->bmapstart + nbitmap, sbp->size);
+
   return 0;
 }

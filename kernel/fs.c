@@ -27,6 +27,12 @@
 // only one device
 struct superblock sb;
 
+struct superblock*
+fsgetsb(void)
+{
+  return &sb;
+}
+
 // Read the super block.
 static void
 readsb(int dev, struct superblock *sb)

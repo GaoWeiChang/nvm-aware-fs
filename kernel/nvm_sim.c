@@ -59,41 +59,63 @@ nvm_read(uint blockno)
     release(&nvm.lock);
 }
 
-void 
-nvm_print_stats(void)
+void
+nvm_print_block_used(void)
 {
-    uint32 total_writes = 0;
-    uint32 total_reads = 0;
-    uint32 max_wear = 0;
-    uint32 min_wear = 0xFFFFFFFF;
     int worn_out_count = 0;
     int used_blocks = 0;
 
     acquire(&nvm.lock);
     for(int i=0; i<NVM_BLOCKS; i++){
         uint32 w = nvm.nvm_table[i].write_count;
-        total_writes += w;
-        total_reads += nvm.nvm_table[i].read_count;
 
-        if(w > 0){
+        if(w > 0)
             used_blocks++;
-            if(w > max_wear)
-                max_wear = w;
-            if(w < min_wear)
-                min_wear = w;
-        }
         if(nvm.nvm_table[i].is_worn_out)
             worn_out_count++;
     }
     release(&nvm.lock);
 
-    printk("=== NVM Stats ===\n");
-    printk("total writes: %d, total reads: %d\n", total_writes, total_reads);
     printk("used blocks: %d / %d\n", used_blocks, NVM_BLOCKS);
     printk("worn-out blocks: %d\n", worn_out_count);
+}
+
+void
+nvm_print_stats(const char *name, uint start, uint end)
+{
+    uint32 total_writes = 0;
+    uint32 max_wear = 0;
+    uint32 min_wear = 0xFFFFFFFF;
+    int max_wear_block = -1;
+    int min_wear_block = -1;
+    int used_blocks = 0;
+
+    if(end > NVM_BLOCKS)
+        end = NVM_BLOCKS;
+
+    acquire(&nvm.lock);
+    for(uint i = start; i < end; i++){
+        uint32 w = nvm.nvm_table[i].write_count;
+        total_writes += w;
+        if(w > 0){
+            used_blocks++;
+            if(w > max_wear){ 
+                max_wear = w; 
+                max_wear_block = i; 
+            }
+            if(w < min_wear){ 
+                min_wear = w; 
+                min_wear_block = i; 
+            }
+        }
+    }
+    release(&nvm.lock);
+
     if(used_blocks > 0)
-        printk("wear range: min=%d, max=%d, spread=%d\n", 
-                min_wear, max_wear, max_wear - min_wear);
+        printk("[%s] blocks %d-%d: writes=%d, wear min=%d (block %d), max=%d (block %d), spread=%d\n",
+            name, start, end - 1, total_writes, min_wear, min_wear_block, max_wear, max_wear_block, max_wear - min_wear);
+    else
+        printk("[%s] blocks %d-%d: writes=%d, (no writes)\n", name, start, end - 1, total_writes);
 }
 
 int 

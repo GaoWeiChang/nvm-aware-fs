@@ -14,7 +14,8 @@ struct nvm_block_info {
 void nvm_init(void);
 void nvm_write(uint blockno);
 void nvm_read(uint blockno);
-void nvm_print_stats(void);
+void nvm_print_block_used(void);
+void nvm_print_stats(const char *name, uint start, uint end);
 int nvm_is_worn_out(uint blockno);
 uint nvm_least_worn_block(void);        // find the least worn block
 uint nvm_get_write_count(uint blockno);
