@@ -67,6 +67,75 @@ bzero(int dev, int bno)
   brelse(bp);
 }
 
+// Current physical block for bitmap bit
+static inline uint
+bmap_block(uint b)
+{
+  uint idx = b / BPB;
+  return BBLOCK_SLOT(b, sb, sb.bmapslot[idx]);
+}
+
+// Relocate the logical bitmap block (idx) to the least wear physical slots
+static void
+bitmap_relocate(int dev, uint idx)
+{
+  uint base = sb.bmapstart + idx * BITMAP_SLOTS;
+  uint cur_slot = sb.bmapslot[idx];
+  uint cur_block = base + cur_slot;
+  uint best_slot = cur_slot;
+  uint best_wear = nvm_get_write_count(cur_block);
+
+  // find best wear
+  for (int s=0; s < BITMAP_SLOTS; s++) {
+    uint blk = base + s;
+    if(s == cur_slot || nvm_is_worn_out(blk))
+      continue;
+    uint w = nvm_get_write_count(blk);
+    if(w < best_wear){
+      best_wear = w;
+      best_slot = s;
+    }
+  }
+  if(best_slot == cur_slot)
+    return;
+
+  // move old to new place
+  struct buf *old_bp = bread(dev, cur_block);
+  struct buf *new_bp = bread(dev, base + best_slot);
+  memmove(new_bp->data, old_bp->data, BSIZE);
+  log_write(new_bp);
+  brelse(old_bp);
+  brelse(new_bp);
+
+  sb.bmapslot[idx] = best_slot;
+
+  // persist the updated slot index
+  struct buf *sbp = bread(dev, 1);
+  memmove(sbp->data, &sb, sizeof(sb));
+  log_write(sbp);
+  brelse(sbp);
+}
+
+// After writing to the bitmap block for logical group idx, relocate it if
+// it's worn out or has skewed far ahead of its least-worn sibling slot
+static void
+bitmap_check_wear(int dev, uint idx)
+{
+  uint base = sb.bmapstart + idx * BITMAP_SLOTS;
+  uint cur_block = base + sb.bmapslot[idx];
+  uint min_wear = 0xFFFFFFFF;
+
+  for (int s = 0; s < BITMAP_SLOTS; s++) {
+    uint w = nvm_get_write_count(base + s);
+    if (w < min_wear)
+      min_wear = w;
+  }
+
+  uint cur_wear = nvm_get_write_count(cur_block);
+  if (nvm_is_worn_out(cur_block) || cur_wear >= min_wear + NVM_WEAR_SKEW_LIMIT)
+    bitmap_relocate(dev, idx);
+}
+
 // Blocks.
 
 // Allocate a zeroed disk block.
@@ -82,7 +151,7 @@ balloc(uint dev)
 
   // scan all block to find least wear block
   for (b = 0; b < sb.size; b += BPB) {
-    bp = bread(dev, BBLOCK(b, sb));
+    bp = bread(dev, bmap_block(b));
     for (bi = 0; bi < BPB && b + bi < sb.size; bi++) {
       m = 1 << (bi % 8);
       if ((bp->data[bi / 8] & m) == 0) { // Is block free?
@@ -108,12 +177,13 @@ balloc(uint dev)
   }
 
   // allocate least wear block
-  bp = bread(dev, BBLOCK(best_block, sb));
+  bp = bread(dev, bmap_block(best_block));
   bi = best_block % BPB;
   m = 1 << (bi % 8);
   bp->data[bi / 8] |= m;           // Mark block in use.
   log_write(bp);
   brelse(bp);
+  bitmap_check_wear(dev, best_block / BPB);
   bzero(dev, best_block);
 
   return best_block;
@@ -126,7 +196,7 @@ bfree(int dev, uint b)
   struct buf *bp;
   int bi, m;
 
-  bp = bread(dev, BBLOCK(b, sb));
+  bp = bread(dev, bmap_block(b));
   bi = b % BPB;
   m = 1 << (bi % 8);
   if ((bp->data[bi / 8] & m) == 0)
@@ -134,6 +204,7 @@ bfree(int dev, uint b)
   bp->data[bi / 8] &= ~m;
   log_write(bp);
   brelse(bp);
+  bitmap_check_wear(dev, b / BPB);
 }
 
 // Remap old block to the least wear block

@@ -91,9 +91,14 @@ main(int argc, char *argv[])
   fsfd = open(argv[1], O_RDWR | O_CREAT | O_TRUNC, 0666);
   if (fsfd < 0)
     die(argv[1]);
+  
+  if (nbitmap > MAXBITMAP) {
+    fprintf(stderr, "mkfs: nbitmap %d exceeds MAXBITMAP %d\n", nbitmap, MAXBITMAP);
+    exit(1);
+  }
 
   // 1 fs block = 1 disk sector
-  nmeta = 2 + nlog + ninodeblocks + nbitmap;
+  nmeta = 2 + nlog + ninodeblocks + nbitmap * BITMAP_SLOTS;
   nblocks = FSSIZE - nmeta;
 
   sb.magic = FSMAGIC;
