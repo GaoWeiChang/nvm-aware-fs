@@ -85,7 +85,7 @@ bitmap_relocate(int dev, uint idx)
   uint best_slot = cur_slot;
   uint best_wear = nvm_get_write_count(cur_block);
 
-  // find best wear
+  // find least wear
   for (int s=0; s < BITMAP_SLOTS; s++) {
     uint blk = base + s;
     if(s == cur_slot || nvm_is_worn_out(blk))
@@ -134,6 +134,66 @@ bitmap_check_wear(int dev, uint idx)
   uint cur_wear = nvm_get_write_count(cur_block);
   if (nvm_is_worn_out(cur_block) || cur_wear >= min_wear + NVM_WEAR_SKEW_LIMIT)
     bitmap_relocate(dev, idx);
+}
+
+// Relocate logical inode block to the least worn slot
+static void
+inode_relocate(int dev, uint idx)
+{
+  uint base = sb.inodestart + idx * INODE_SLOTS;
+  uint cur_slot = sb.inodeslot[idx];
+  uint cur_block = base + cur_slot;
+  uint best_slot = cur_slot;
+  uint best_wear = nvm_get_write_count(cur_block);
+
+  // find least wear
+  for (int s = 0; s < INODE_SLOTS; s++) {
+    uint blk = base + s;
+    if(s == cur_slot || nvm_is_worn_out(blk))
+      continue;
+    uint w = nvm_get_write_count(blk);
+    if(w < best_wear){
+      best_wear = w;
+      best_slot = s;
+    }
+  }
+  if(best_slot == cur_slot)
+    return;
+
+  // move old data to new place
+  struct buf *old_bp = bread(dev, cur_block);
+  struct buf *new_bp = bread(dev, base + best_slot);
+  memmove(new_bp->data, old_bp->data, BSIZE);
+  log_write(new_bp);
+  brelse(old_bp);
+  brelse(new_bp);
+
+  sb.inodeslot[idx] = best_slot;
+
+  // persist the updated slot index
+  struct buf *sbp = bread(dev, 1);
+  memmove(sbp->data, &sb, sizeof(sb));
+  log_write(sbp);
+  brelse(sbp);
+}
+
+// Relocate inode block if it's worn out or exceed skew
+static void
+inode_check_wear(int dev, uint idx)
+{
+  uint base = sb.inodestart + idx * INODE_SLOTS;
+  uint cur_block = base + sb.inodeslot[idx];
+  uint min_wear = 0xFFFFFFFF;
+
+  for (int s = 0; s < INODE_SLOTS; s++) {
+    uint w = nvm_get_write_count(base + s);
+    if (w < min_wear)
+      min_wear = w;
+  }
+
+  uint cur_wear = nvm_get_write_count(cur_block);
+  if (nvm_is_worn_out(cur_block) || cur_wear >= min_wear + NVM_WEAR_SKEW_LIMIT)
+    inode_relocate(dev, idx);
 }
 
 // Blocks.
@@ -340,6 +400,7 @@ ialloc(uint dev, short type)
       dip->type = type;
       log_write(bp); // mark it allocated on the disk
       brelse(bp);
+      inode_check_wear(dev, inum / IPB);
       return iget(dev, inum);
     }
     brelse(bp);
@@ -368,6 +429,7 @@ iupdate(struct inode *ip)
   memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
   log_write(bp);
   brelse(bp);
+  inode_check_wear(ip->dev, ip->inum / IPB);
 }
 
 // Find the inode with number inum on device dev

@@ -97,8 +97,13 @@ main(int argc, char *argv[])
     exit(1);
   }
 
+  if (ninodeblocks > MAXINODEBLOCK) {
+    fprintf(stderr, "mkfs: ninodeblocks %d exceeds MAXINODEBLOCK %d\n", ninodeblocks, MAXINODEBLOCK);
+    exit(1);
+  }
+
   // 1 fs block = 1 disk sector
-  nmeta = 2 + nlog + ninodeblocks + nbitmap * BITMAP_SLOTS;
+  nmeta = 2 + nlog + ninodeblocks * INODE_SLOTS + nbitmap * BITMAP_SLOTS;
   nblocks = FSSIZE - nmeta;
 
   sb.magic = FSMAGIC;
@@ -108,7 +113,7 @@ main(int argc, char *argv[])
   sb.nlog = xint(nlog);
   sb.logstart = xint(2);
   sb.inodestart = xint(2 + nlog);
-  sb.bmapstart = xint(2 + nlog + ninodeblocks);
+  sb.bmapstart = xint(2 + nlog + ninodeblocks * INODE_SLOTS);
 
   printf(
     "nmeta %d (boot, super, log blocks %u, inode blocks %u, bitmap blocks %u) blocks %d total %d\n",
