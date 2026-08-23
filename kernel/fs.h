@@ -11,8 +11,11 @@
 // mkfs computes the super block and builds an initial file system. The
 // super block describes the disk layout:
 
-#define BITMAP_SLOTS 8 // number of rotating physical slot reserved per logical bitmap block
-#define MAXBITMAP 8
+#define BITMAP_SLOTS 8      // number of rotating physical slot reserved per logical bitmap block
+#define MAXBITMAP 8         // number of logical bitmap block
+#define INODE_SLOTS 8       // number of rotating physical slot reserved per logical inode block
+#define MAXINODEBLOCK 16    // number of logical inode block
+
 struct superblock {
   uint magic;      // Must be FSMAGIC
   uint size;       // Size of file system image (blocks)
@@ -22,7 +25,10 @@ struct superblock {
   uint logstart;   // Block number of first log block
   uint inodestart; // Block number of first inode block
   uint bmapstart;  // Block number of first free map block
-  uint bmapslot[MAXBITMAP]; // Active physical slot per logical bitmap block
+
+  // each logical block (element in array) point to which slot
+  uint bmapslot[MAXBITMAP];         // Active physical slot per logical bitmap block
+  uint inodeslot[MAXINODEBLOCK];    // Active physical slot per logical inode block
 };
 
 #define FSMAGIC 0x10203040
@@ -44,8 +50,11 @@ struct dinode {
 // Inodes per block.
 #define IPB (BSIZE / sizeof(struct dinode))
 
+// Physical block holding a given slot of the logical inode block covering inode i
+#define IBLOCK_SLOT(i, sb, slot) ((i) / IPB * INODE_SLOTS + (slot) + (sb).inodestart)
+
 // Block containing inode i
-#define IBLOCK(i, sb) ((i) / IPB + sb.inodestart)
+#define IBLOCK(i, sb) IBLOCK_SLOT(i, sb, (sb).inodeslot[(i) / IPB])
 
 // Bitmap bits per block
 #define BPB (BSIZE * 8)
