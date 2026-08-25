@@ -13,7 +13,7 @@
 
 #define BITMAP_SLOTS 8      // number of rotating physical slot reserved per logical bitmap block
 #define MAXBITMAP 8         // number of logical bitmap block
-#define INODE_SLOTS 8       // number of rotating physical slot reserved per logical inode block
+#define INODE_SLOTS 32      // number of rotating physical slot reserved per logical inode block
 #define MAXINODEBLOCK 16    // number of logical inode block
 
 struct superblock {

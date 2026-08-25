@@ -294,6 +294,19 @@ remap_block(uint dev, uint old_block)
   return new_block;
 }
 
+// check worn, if block meet worn condition, remap it to new block
+static uint
+remap_if_worn(uint dev, uint addr)
+{
+  uint min_wear = nvm_get_write_count(nvm_least_worn_block());
+  uint cur_wear = nvm_get_write_count(addr);
+
+  if (nvm_is_worn_out(addr) || cur_wear >= min_wear + NVM_WEAR_SKEW_LIMIT)
+    return remap_block(dev, addr);
+  
+  return addr;
+}
+
 // Inodes.
 //
 // An inode describes a single unnamed file.
@@ -594,7 +607,7 @@ ireclaim(int dev)
 // If there is no such block, bmap allocates one.
 // returns 0 if out of disk space.
 static uint
-bmap(struct inode *ip, uint bn)
+bmap(struct inode *ip, uint bn, int iswrite)
 {
   uint addr, *a;
   struct buf *bp;
@@ -605,6 +618,14 @@ bmap(struct inode *ip, uint bn)
       if (addr == 0)
         return 0;
       ip->addrs[bn] = addr;
+    }
+
+    if (iswrite) {
+      uint new_addr = remap_if_worn(ip->dev, addr);
+      if (new_addr != addr) {
+        ip->addrs[bn] = new_addr;
+        addr = new_addr;
+      }
     }
     return addr;
   }
@@ -617,7 +638,16 @@ bmap(struct inode *ip, uint bn)
       if (addr == 0)
         return 0;
       ip->addrs[NDIRECT] = addr;
+    } 
+    else if (iswrite) {
+      uint new_addr = remap_if_worn(ip->dev, addr);
+      if(new_addr != addr){
+        ip->addrs[NDIRECT] = new_addr;
+        addr = new_addr;
+      }
     }
+
+    // data block
     bp = bread(ip->dev, addr);
     a = (uint *)bp->data;
     if ((addr = a[bn]) == 0) {
@@ -625,6 +655,14 @@ bmap(struct inode *ip, uint bn)
       if (addr) {
         a[bn] = addr;
         log_write(bp);
+      }
+    }
+    else if (iswrite) {
+      uint new_addr = remap_if_worn(ip->dev, addr);
+      if (new_addr != addr) {
+        a[bn] = new_addr;
+        log_write(bp);
+        addr = new_addr;
       }
     }
     brelse(bp);
@@ -694,7 +732,7 @@ readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
     n = ip->size - off;
 
   for (tot = 0; tot < n; tot += m, off += m, dst += m) {
-    uint addr = bmap(ip, off / BSIZE);
+    uint addr = bmap(ip, off / BSIZE, 0);
     if (addr == 0)
       break;
     bp = bread(ip->dev, addr);
@@ -728,18 +766,9 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
     return -1;
 
   for (tot = 0; tot < n; tot += m, off += m, src += m) {
-    uint addr = bmap(ip, off / BSIZE);
+    uint addr = bmap(ip, off / BSIZE, 1);
     if (addr == 0)
       break;
-
-    uint min_wear = nvm_get_write_count(nvm_least_worn_block());
-    uint cur_wear = nvm_get_write_count(addr);
-
-    // check for remap address for the data block
-    if((nvm_is_worn_out(addr)) || (cur_wear >= min_wear + NVM_WEAR_SKEW_LIMIT)){
-      addr = remap_block(ip->dev, addr);
-      ip->addrs[off / BSIZE] = addr;        // update indirection table
-    }
 
     bp = bread(ip->dev, addr);
     m = min(n - tot, BSIZE - off % BSIZE);
