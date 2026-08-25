@@ -123,8 +123,8 @@ sys_nvmstats(void)
 
   nvm_print_stats("log",    sbp->logstart,   sbp->inodestart);
   nvm_print_stats("inode",  sbp->inodestart, sbp->bmapstart);
-  nvm_print_stats("bitmap", sbp->bmapstart,  sbp->bmapstart + nbitmap);
-  nvm_print_stats("data",   sbp->bmapstart + nbitmap, sbp->size);
+  nvm_print_stats("bitmap", sbp->bmapstart,  sbp->bmapstart + nbitmap * BITMAP_SLOTS);
+  nvm_print_stats("data",   sbp->bmapstart + nbitmap * BITMAP_SLOTS, sbp->size);
 
   return 0;
 }

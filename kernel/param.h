@@ -13,4 +13,4 @@
 #define MAXPATH     128               // maximum file path name
 #define USERSTACK   1                 // user stack pages
 #define LOGBLOCKS   (MAXOPBLOCKS * 3) // max data blocks in on-disk log
-#define LOG_HDR_SLOTS 8               // number of rotating log-header slots
+#define LOG_HDR_SLOTS 16               // number of rotating log-header slots

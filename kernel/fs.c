@@ -67,6 +67,135 @@ bzero(int dev, int bno)
   brelse(bp);
 }
 
+// Current physical block for bitmap bit
+static inline uint
+bmap_block(uint b)
+{
+  uint idx = b / BPB;
+  return BBLOCK_SLOT(b, sb, sb.bmapslot[idx]);
+}
+
+// Relocate the logical bitmap block (idx) to the least wear physical slots
+static void
+bitmap_relocate(int dev, uint idx)
+{
+  uint base = sb.bmapstart + idx * BITMAP_SLOTS;
+  uint cur_slot = sb.bmapslot[idx];
+  uint cur_block = base + cur_slot;
+  uint best_slot = cur_slot;
+  uint best_wear = nvm_get_write_count(cur_block);
+
+  // find least wear
+  for (int s=0; s < BITMAP_SLOTS; s++) {
+    uint blk = base + s;
+    if(s == cur_slot || nvm_is_worn_out(blk))
+      continue;
+    uint w = nvm_get_write_count(blk);
+    if(w < best_wear){
+      best_wear = w;
+      best_slot = s;
+    }
+  }
+  if(best_slot == cur_slot)
+    return;
+
+  // move old to new place
+  struct buf *old_bp = bread(dev, cur_block);
+  struct buf *new_bp = bread(dev, base + best_slot);
+  memmove(new_bp->data, old_bp->data, BSIZE);
+  log_write(new_bp);
+  brelse(old_bp);
+  brelse(new_bp);
+
+  sb.bmapslot[idx] = best_slot;
+
+  // persist the updated slot index
+  struct buf *sbp = bread(dev, 1);
+  memmove(sbp->data, &sb, sizeof(sb));
+  log_write(sbp);
+  brelse(sbp);
+}
+
+// After writing to the bitmap block for logical group idx, relocate it if
+// it's worn out or has skewed far ahead of its least-worn sibling slot
+static void
+bitmap_check_wear(int dev, uint idx)
+{
+  uint base = sb.bmapstart + idx * BITMAP_SLOTS;
+  uint cur_block = base + sb.bmapslot[idx];
+  uint min_wear = 0xFFFFFFFF;
+
+  for (int s = 0; s < BITMAP_SLOTS; s++) {
+    uint w = nvm_get_write_count(base + s);
+    if (w < min_wear)
+      min_wear = w;
+  }
+
+  uint cur_wear = nvm_get_write_count(cur_block);
+  if (nvm_is_worn_out(cur_block) || cur_wear >= min_wear + NVM_WEAR_SKEW_LIMIT)
+    bitmap_relocate(dev, idx);
+}
+
+// Relocate logical inode block to the least worn slot
+static void
+inode_relocate(int dev, uint idx)
+{
+  uint base = sb.inodestart + idx * INODE_SLOTS;
+  uint cur_slot = sb.inodeslot[idx];
+  uint cur_block = base + cur_slot;
+  uint best_slot = cur_slot;
+  uint best_wear = nvm_get_write_count(cur_block);
+
+  // find least wear
+  for (int s = 0; s < INODE_SLOTS; s++) {
+    uint blk = base + s;
+    if(s == cur_slot || nvm_is_worn_out(blk))
+      continue;
+    uint w = nvm_get_write_count(blk);
+    if(w < best_wear){
+      best_wear = w;
+      best_slot = s;
+    }
+  }
+  if(best_slot == cur_slot)
+    return;
+
+  // move old data to new place
+  struct buf *old_bp = bread(dev, cur_block);
+  struct buf *new_bp = bread(dev, base + best_slot);
+  memmove(new_bp->data, old_bp->data, BSIZE);
+  log_write(new_bp);
+  brelse(old_bp);
+  brelse(new_bp);
+
+  sb.inodeslot[idx] = best_slot;
+
+  // persist the updated slot index
+  struct buf *sbp = bread(dev, 1);
+  memmove(sbp->data, &sb, sizeof(sb));
+  log_write(sbp);
+  brelse(sbp);
+}
+
+// Relocate inode block if it's worn out or exceed skew
+static void
+inode_check_wear(int dev, uint idx)
+{
+  uint base = sb.inodestart + idx * INODE_SLOTS;
+  uint cur_block = base + sb.inodeslot[idx];
+  uint min_wear = 0xFFFFFFFF;
+
+  for (int s = 0; s < INODE_SLOTS; s++) {
+    uint w = nvm_get_write_count(base + s);
+    if (w < min_wear)
+      min_wear = w;
+  }
+
+  uint cur_wear = nvm_get_write_count(cur_block);
+  if (nvm_is_worn_out(cur_block) || cur_wear >= min_wear + NVM_WEAR_SKEW_LIMIT)
+    inode_relocate(dev, idx);
+}
+
 // Blocks.
 
 // Allocate a zeroed disk block.
@@ -82,7 +211,7 @@ balloc(uint dev)
 
   // scan all block to find least wear block
   for (b = 0; b < sb.size; b += BPB) {
-    bp = bread(dev, BBLOCK(b, sb));
+    bp = bread(dev, bmap_block(b));
     for (bi = 0; bi < BPB && b + bi < sb.size; bi++) {
       m = 1 << (bi % 8);
       if ((bp->data[bi / 8] & m) == 0) { // Is block free?
@@ -108,12 +237,13 @@ balloc(uint dev)
   }
 
   // allocate least wear block
-  bp = bread(dev, BBLOCK(best_block, sb));
+  bp = bread(dev, bmap_block(best_block));
   bi = best_block % BPB;
   m = 1 << (bi % 8);
   bp->data[bi / 8] |= m;           // Mark block in use.
   log_write(bp);
   brelse(bp);
+  bitmap_check_wear(dev, best_block / BPB);
   bzero(dev, best_block);
 
   return best_block;
@@ -126,7 +256,7 @@ bfree(int dev, uint b)
   struct buf *bp;
   int bi, m;
 
-  bp = bread(dev, BBLOCK(b, sb));
+  bp = bread(dev, bmap_block(b));
   bi = b % BPB;
   m = 1 << (bi % 8);
   if ((bp->data[bi / 8] & m) == 0)
@@ -134,6 +264,7 @@ bfree(int dev, uint b)
   bp->data[bi / 8] &= ~m;
   log_write(bp);
   brelse(bp);
+  bitmap_check_wear(dev, b / BPB);
 }
 
 // Remap old block to the least wear block
@@ -161,6 +292,19 @@ remap_block(uint dev, uint old_block)
   bfree(dev, old_block);
 
   return new_block;
+}
+
+// check worn, if block meet worn condition, remap it to new block
+static uint
+remap_if_worn(uint dev, uint addr)
+{
+  uint min_wear = nvm_get_write_count(nvm_least_worn_block());
+  uint cur_wear = nvm_get_write_count(addr);
+
+  if (nvm_is_worn_out(addr) || cur_wear >= min_wear + NVM_WEAR_SKEW_LIMIT)
+    return remap_block(dev, addr);
+  
+  return addr;
 }
 
 // Inodes.
@@ -269,6 +413,7 @@ ialloc(uint dev, short type)
       dip->type = type;
       log_write(bp); // mark it allocated on the disk
       brelse(bp);
+      inode_check_wear(dev, inum / IPB);
       return iget(dev, inum);
     }
     brelse(bp);
@@ -297,6 +442,7 @@ iupdate(struct inode *ip)
   memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
   log_write(bp);
   brelse(bp);
+  inode_check_wear(ip->dev, ip->inum / IPB);
 }
 
 // Find the inode with number inum on device dev
@@ -461,7 +607,7 @@ ireclaim(int dev)
 // If there is no such block, bmap allocates one.
 // returns 0 if out of disk space.
 static uint
-bmap(struct inode *ip, uint bn)
+bmap(struct inode *ip, uint bn, int iswrite)
 {
   uint addr, *a;
   struct buf *bp;
@@ -472,6 +618,14 @@ bmap(struct inode *ip, uint bn)
       if (addr == 0)
         return 0;
       ip->addrs[bn] = addr;
+    }
+
+    if (iswrite) {
+      uint new_addr = remap_if_worn(ip->dev, addr);
+      if (new_addr != addr) {
+        ip->addrs[bn] = new_addr;
+        addr = new_addr;
+      }
     }
     return addr;
   }
@@ -484,7 +638,16 @@ bmap(struct inode *ip, uint bn)
       if (addr == 0)
         return 0;
       ip->addrs[NDIRECT] = addr;
+    } 
+    else if (iswrite) {
+      uint new_addr = remap_if_worn(ip->dev, addr);
+      if(new_addr != addr){
+        ip->addrs[NDIRECT] = new_addr;
+        addr = new_addr;
+      }
     }
+
+    // data block
     bp = bread(ip->dev, addr);
     a = (uint *)bp->data;
     if ((addr = a[bn]) == 0) {
@@ -492,6 +655,14 @@ bmap(struct inode *ip, uint bn)
       if (addr) {
         a[bn] = addr;
         log_write(bp);
+      }
+    }
+    else if (iswrite) {
+      uint new_addr = remap_if_worn(ip->dev, addr);
+      if (new_addr != addr) {
+        a[bn] = new_addr;
+        log_write(bp);
+        addr = new_addr;
       }
     }
     brelse(bp);
@@ -561,7 +732,7 @@ readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
     n = ip->size - off;
 
   for (tot = 0; tot < n; tot += m, off += m, dst += m) {
-    uint addr = bmap(ip, off / BSIZE);
+    uint addr = bmap(ip, off / BSIZE, 0);
     if (addr == 0)
       break;
     bp = bread(ip->dev, addr);
@@ -595,18 +766,9 @@ writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
     return -1;
 
   for (tot = 0; tot < n; tot += m, off += m, src += m) {
-    uint addr = bmap(ip, off / BSIZE);
+    uint addr = bmap(ip, off / BSIZE, 1);
     if (addr == 0)
       break;
-
-    uint min_wear = nvm_get_write_count(nvm_least_worn_block());
-    uint cur_wear = nvm_get_write_count(addr);
-
-    // check for remap address for the data block
-    if((nvm_is_worn_out(addr)) || (cur_wear >= min_wear + NVM_WEAR_SKEW_LIMIT)){
-      addr = remap_block(ip->dev, addr);
-      ip->addrs[off / BSIZE] = addr;        // update indirection table
-    }
 
     bp = bread(ip->dev, addr);
     m = min(n - tot, BSIZE - off % BSIZE);
