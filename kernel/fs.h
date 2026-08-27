@@ -59,14 +59,14 @@ struct dinode {
 // Bitmap bits per block
 #define BPB (BSIZE * 8)
 
-// Block of free map containing bit for block b
-#define BBLOCK(b, sb) ((b) / BPB + sb.bmapstart)
+// Physical block holding a given slot of the logical bitmap block covering block b
+#define BBLOCK_SLOT(b, sb, slot) ((b) / BPB * BITMAP_SLOTS + (slot) + (sb).bmapstart)
+
+// Block of free map containing bit for block b (routed through the active slot)
+#define BBLOCK(b, sb) BBLOCK_SLOT(b, sb, (sb).bmapslot[(b) / BPB])
 
 // Directory is a file containing a sequence of dirent structures.
 #define DIRSIZ 14
-
-// Physical block holding a given slot of the logical bitmap block covering block b
-#define BBLOCK_SLOT(b, sb, slot) ((b) / BPB * BITMAP_SLOTS + (slot) + (sb).bmapstart)
 
 // The name field may have DIRSIZ characters and not end in a NUL
 // character.

@@ -67,14 +67,6 @@ bzero(int dev, int bno)
   brelse(bp);
 }
 
-// Current physical block for bitmap bit
-static inline uint
-bmap_block(uint b)
-{
-  uint idx = b / BPB;
-  return BBLOCK_SLOT(b, sb, sb.bmapslot[idx]);
-}
-
 // Relocate the logical bitmap block (idx) to the least wear physical slots
 static void
 bitmap_relocate(int dev, uint idx)
@@ -211,7 +203,7 @@ balloc(uint dev)
 
   // scan all block to find least wear block
   for (b = 0; b < sb.size; b += BPB) {
-    bp = bread(dev, bmap_block(b));
+    bp = bread(dev, BBLOCK(b, sb));
     for (bi = 0; bi < BPB && b + bi < sb.size; bi++) {
       m = 1 << (bi % 8);
       if ((bp->data[bi / 8] & m) == 0) { // Is block free?
@@ -237,7 +229,7 @@ balloc(uint dev)
   }
 
   // allocate least wear block
-  bp = bread(dev, bmap_block(best_block));
+  bp = bread(dev, BBLOCK(best_block, sb));
   bi = best_block % BPB;
   m = 1 << (bi % 8);
   bp->data[bi / 8] |= m;           // Mark block in use.
@@ -256,7 +248,7 @@ bfree(int dev, uint b)
   struct buf *bp;
   int bi, m;
 
-  bp = bread(dev, bmap_block(b));
+  bp = bread(dev, BBLOCK(b, sb));
   bi = b % BPB;
   m = 1 << (bi % 8);
   if ((bp->data[bi / 8] & m) == 0)
