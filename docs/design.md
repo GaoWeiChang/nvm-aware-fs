@@ -25,7 +25,7 @@ After allocated the least-worn free block and marks its bit, checks whether the 
 
 - ### Logging layer
     - #### log header
-        For the log header, it will stored acress fixed size k slot that rotate round-robin on every write, each tagged with a monotonically increasing sequence. On boot, the `read_head()` scans all slots and loads the one with the highest seq (most recently committed header).
+        For the log header, it will stored across fixed size k slot that rotate round-robin on every write, each tagged with a monotonically increasing sequence. On boot, the `read_head()` scans all slots and loads the one with the highest seq (most recently committed header).
         ![alt text](images/log_header.png)
         **NOTE**: Round-robin is sufficient here because every commit writes the header exactly twice at a fixed size, so wear spreads evenly across the slots without needing to track per-slot wear.
 

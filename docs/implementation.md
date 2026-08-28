@@ -83,7 +83,7 @@ uint nvm_least_worn_block(void);         // global argmin over non-worn blocks
 #### 1.4 Wiring
 
 - `Makefile`: add `$K/nvm_sim.o` to `OBJS`.
-- `kernel/defs.h`: declare the six public functions under a `// nvm_sim.c` block.
+- `kernel/defs.h`: declare the public functions under a `// nvm_sim.c` block.
 - `kernel/main.c`: call `nvm_init()` once, right after `binit()` (buffer cache) and before `iinit()`, the table must exist before the first `bread`/`bwrite`.
 
 ```c
